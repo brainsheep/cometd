@@ -77,7 +77,7 @@ public class OortStringMapDisconnectTest extends OortTest {
     @Test
     public void testMassiveDisconnect() throws Exception {
         int nodes = 4;
-        int usersPerNode = 100;
+        int usersPerNode = 1000;
         int totalUsers = nodes * usersPerNode;
         // One event in a node is replicated to other "nodes" nodes.
         int totalEvents = nodes * totalUsers;
