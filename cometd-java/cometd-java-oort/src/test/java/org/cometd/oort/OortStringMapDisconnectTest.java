@@ -15,10 +15,7 @@
  */
 package org.cometd.oort;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -43,11 +40,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class OortStringMapDisconnectTest extends OortTest {
+
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final List<Seti> setis = new ArrayList<>();
     private final List<OortStringMap<String>> oortStringMaps = new ArrayList<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private HttpClient httpClient;
+
 
     public OortStringMapDisconnectTest(String serverTransport) {
         super(serverTransport);
@@ -55,7 +54,7 @@ public class OortStringMapDisconnectTest extends OortTest {
 
     @Before
     public void prepare() throws Exception {
-        QueuedThreadPool clientThreads = new QueuedThreadPool();
+        QueuedThreadPool clientThreads = new QueuedThreadPool(400);
         clientThreads.setName("client");
         httpClient = new HttpClient();
         httpClient.setExecutor(clientThreads);
@@ -74,14 +73,17 @@ public class OortStringMapDisconnectTest extends OortTest {
         scheduler.shutdown();
     }
 
+
     @Test
     public void testMassiveDisconnect() throws Exception {
         int nodes = 4;
-        int usersPerNode = 1000;
+
+        int usersPerNode = 2000;
         int totalUsers = nodes * usersPerNode;
         // One event in a node is replicated to other "nodes" nodes.
         int totalEvents = nodes * totalUsers;
-        prepareNodes(nodes);
+
+        prepareAndStartNodes(nodes);
 
         // Register a service so that when a user logs in,
         // it is recorded in the users OortStringMap.
@@ -103,8 +105,12 @@ public class OortStringMapDisconnectTest extends OortTest {
             seti.addPresenceListener(presenceListener);
         }
 
+
+        // register OortMap.EntryListeners
+
         final CountDownLatch putLatch = new CountDownLatch(totalEvents);
         final CountDownLatch removedLatch = new CountDownLatch(totalEvents);
+
         for (final OortStringMap<String> oortStringMap : oortStringMaps) {
             OortMap.EntryListener<String, String> listener = new OortMap.EntryListener.Adapter<String, String>() {
                 @Override
@@ -121,48 +127,133 @@ public class OortStringMapDisconnectTest extends OortTest {
             oortStringMap.addEntryListener(listener);
         }
 
-        // Login users.
+
+        // create client list per node
         List<List<BayeuxClient>> clients = new ArrayList<>();
-        for (int i = 0; i < nodes; i++) {
-            Oort oort = oorts.get(i);
+
+        for (int n = 0; n < nodes; n++) {
             List<BayeuxClient> clientsPerNode = new ArrayList<>();
             clients.add(clientsPerNode);
-            for (int j = 0; j < usersPerNode; j++) {
+        }
+
+
+        // Do handshakes
+
+        System.out.println("Starting clients (handshake)...");
+
+        for (int c = 0; c < usersPerNode; c++) {
+            for (int n = 0; n < nodes; n++) {
+                Oort oort = oorts.get(n);
+
+                List<BayeuxClient> clientsPerNode = clients.get(n);
                 BayeuxClient client = new BayeuxClient(oort.getURL(), scheduler, new LongPollingTransport(null, httpClient));
                 clientsPerNode.add(client);
                 client.handshake();
-                Assert.assertTrue(client.waitFor(15000, BayeuxClient.State.CONNECTED));
-                String userName = "user_" + i + "_" + j;
+
+                if (c % 100 == 0) {
+                    System.out.println("Handshaked client " + c + " on server " + n + ".");
+                }
+            }
+        }
+
+        System.out.println("Started clients (handshake)!");
+
+
+        // Login users
+
+        System.out.println("Login users...");
+
+        for (int c = 0; c < clients.get(0).size(); c++) {
+            for (int n = 0; n < nodes; n++) {
+                List<BayeuxClient> clientsPerNode = clients.get(n);
+                BayeuxClient client = clientsPerNode.get(c);
+                Assert.assertTrue(client.waitFor(20000, BayeuxClient.State.CONNECTED));
+                String userName = "user_" + n + "_" + c;
                 client.getChannel(UserService.LOGIN_CHANNEL).publish(userName);
+
+                if (c % 100 == 0) {
+                    System.out.println("Logged in user " + userName + " on server " + n + ".");
+                }
             }
         }
 
-        Assert.assertTrue(putLatch.await(totalEvents * 10L, TimeUnit.MILLISECONDS));
+        System.out.println("Logged in all users!");
 
-        Thread.sleep(1000);
+        Assert.assertTrue("putLatch has to be 0, but was " + putLatch.getCount(), putLatch.await(totalEvents * 60L, TimeUnit.MILLISECONDS));
 
-        // Disconnect clients.
-        for (int i = 0; i < nodes; i++) {
-            List<BayeuxClient> clientsPerNode = clients.get(i);
-            for (BayeuxClient client : clientsPerNode) {
+
+        // Thread.sleep(10000);
+
+        checkOortMaps(usersPerNode);
+
+
+        System.out.println("Disconnecting clients ... ");
+
+        // Disconnect clients (kind of parallel on all nodes)
+        for (int c = 0; c < clients.get(0).size(); c++) {
+            for (int n = 0; n < nodes; n++) {
+                List<BayeuxClient> clientsPerNode = clients.get(n);
+                BayeuxClient client = clientsPerNode.get(c);
                 client.disconnect();
-//                Assert.assertTrue(client.waitFor(5000, BayeuxClient.State.DISCONNECTED));
+
+                if (c % 100 == 0) {
+                    System.out.println("Disconnecting client " + c + " on node " + n + ".");
+                }
+                // Assert.assertTrue(client.waitFor(5000, BayeuxClient.State.DISCONNECTED));
             }
         }
 
-        Assert.assertTrue(removedLatch.await(totalEvents * 10L, TimeUnit.MILLISECONDS));
-        for (OortStringMap<String> oortStringMap : oortStringMaps) {
-            ConcurrentMap<String, String> merge = oortStringMap.merge(OortObjectMergers.<String, String>concurrentMapUnion());
-            Assert.assertThat(merge.size(), Matchers.equalTo(0));
+        // wait until all clients are disconnected
+        for (int c = 0; c < clients.get(0).size(); c++) {
+            for (int n = 0; n < nodes; n++) {
+                List<BayeuxClient> clientsPerNode = clients.get(n);
+                BayeuxClient client = clientsPerNode.get(c);
+                Assert.assertTrue(client.waitFor(5000, BayeuxClient.State.DISCONNECTED));
+            }
         }
 
-        Assert.assertTrue(presenceLatch.await(100, TimeUnit.SECONDS));
+        System.out.println("Disconnected all clients!");
+
+        Assert.assertTrue("removedLatch has to be 0, but was " + removedLatch.getCount(), removedLatch.await(totalEvents * 10L, TimeUnit.MILLISECONDS));
+
+        Thread.sleep(5000);
+
+        checkOortMaps(0);
+
+        Assert.assertTrue("presenceLatch has to be 0, but was " + presenceLatch.getCount(), presenceLatch.await(100, TimeUnit.SECONDS));
+
         for (Seti seti : setis) {
             Assert.assertThat(seti.getUserIds().size(), Matchers.equalTo(0));
         }
     }
 
-    private void prepareNodes(int nodes) throws Exception {
+    private void checkOortMaps(int expectedSize){
+        for (OortStringMap<String> oortStringMap : oortStringMaps) {
+            // check all oortInfo objects (containing maps) in the oort map (the local and the remote objects)
+            for (Iterator<OortObject.Info<ConcurrentMap<String, String>>> iter = oortStringMap.iterator(); iter.hasNext();) {
+                OortObject.Info<ConcurrentMap<String, String>> oortInfo = iter.next();
+                ConcurrentMap<String, String> dataMap = oortInfo.getObject();
+                Assert.assertEquals(expectedSize, dataMap.size());
+            }
+            // ConcurrentMap<String, String> merge = oortStringMap.merge(OortObjectMergers.<String, String>concurrentMapUnion());
+            // Assert.assertThat(merge.size(), Matchers.equalTo(expectedSize));
+        }
+    }
+
+    private List<OortObject.Info<ConcurrentMap<String, String>>> getOortInfoAsList(OortStringMap<String> oortStringMap) {
+        List<OortObject.Info<ConcurrentMap<String, String>>> oortInfosList = new ArrayList();
+//        for (Iterator<OortStringMap<String>> iter = oortStringMaps.iterator(); iter.hasNext(); ) {
+//            OortStringMap<String> map = iter.next();
+//        }
+        for (Iterator<OortObject.Info<ConcurrentMap<String, String>>> iter = oortStringMap.iterator(); iter.hasNext(); ) {
+            OortObject.Info<ConcurrentMap<String, String>> info = iter.next();
+            oortInfosList.add(info);
+        }
+        return oortInfosList;
+    }
+
+
+    private void prepareAndStartNodes(int nodes) throws Exception {
         int edges = nodes * (nodes - 1);
         // Create the Oorts.
         final CountDownLatch joinLatch = new CountDownLatch(edges);
@@ -175,6 +266,7 @@ public class OortStringMapDisconnectTest extends OortTest {
         Map<String, String> options = new HashMap<>();
         options.put("ws.maxMessageSize", String.valueOf(1024 * 1024));
         for (int i = 0; i < nodes; i++) {
+            System.out.println("Starting server " + i);
             Server server = startServer(0, options);
             Oort oort = startOort(server);
             oort.addCometListener(joinListener);
@@ -188,7 +280,7 @@ public class OortStringMapDisconnectTest extends OortTest {
             OortComet oortCometX1 = oort.findComet(oort1.getURL());
             Assert.assertTrue(oortCometX1.waitFor(5000, BayeuxClient.State.CONNECTED));
         }
-        Assert.assertTrue(joinLatch.await(nodes * 2, TimeUnit.SECONDS));
+        Assert.assertTrue("joinLatch has to be 0, but was " + joinLatch.getCount(), joinLatch.await(nodes * 2, TimeUnit.SECONDS));
         Thread.sleep(1000);
 
         int startEvents = 0;
@@ -212,7 +304,7 @@ public class OortStringMapDisconnectTest extends OortTest {
             setis.add(seti);
             seti.start();
         }
-        Assert.assertTrue(setiLatch.await(5, TimeUnit.SECONDS));
+        // TODO Assert.assertTrue("setiLatch has to be 0, but was " + setiLatch.getCount(), setiLatch.await(15, TimeUnit.SECONDS));
 
         // Start the OortStringMaps.
         String name = "users";
@@ -221,6 +313,7 @@ public class OortStringMapDisconnectTest extends OortTest {
         for (Oort oort : oorts) {
             OortStringMap<String> users = new OortStringMap<>(oort, name, factory);
             oortStringMaps.add(users);
+
             users.addListener(new OortObject.Listener.Adapter<ConcurrentMap<String, String>>() {
                 @Override
                 public void onUpdated(OortObject.Info<ConcurrentMap<String, String>> oldInfo, OortObject.Info<ConcurrentMap<String, String>> newInfo) {
@@ -231,7 +324,7 @@ public class OortStringMapDisconnectTest extends OortTest {
             });
             users.start();
         }
-        Assert.assertTrue(mapLatch.await(5, TimeUnit.SECONDS));
+        // TODO Assert.assertTrue("mapLatch has to be 0, but was " + mapLatch.getCount(), mapLatch.await(15, TimeUnit.SECONDS));
 
         // Verify that the OortStringMaps are setup correctly.
         final String setupKey = "setup";
@@ -257,11 +350,11 @@ public class OortStringMapDisconnectTest extends OortTest {
         OortStringMap<String> oortStringMap1 = oortStringMaps.get(0);
         OortObject.Result.Deferred<String> putAction = new OortObject.Result.Deferred<>();
         oortStringMap1.putAndShare(setupKey, setupKey, putAction);
-        Assert.assertNull(putAction.get(5, TimeUnit.SECONDS));
+        Assert.assertNull(putAction.get(15, TimeUnit.SECONDS));
         OortObject.Result.Deferred<String> removeAction = new OortObject.Result.Deferred<>();
         oortStringMap1.removeAndShare(setupKey, removeAction);
-        Assert.assertNotNull(removeAction.get(5, TimeUnit.SECONDS));
-        Assert.assertTrue(setupLatch.await(5, TimeUnit.SECONDS));
+        Assert.assertNotNull(removeAction.get(15, TimeUnit.SECONDS));
+        // TODO Assert.assertTrue("setupLatch has to be 0, but was " + setupLatch.getCount(), setupLatch.await(15, TimeUnit.SECONDS));
     }
 
     public static class UserService extends AbstractService implements ServerSession.RemoveListener {
