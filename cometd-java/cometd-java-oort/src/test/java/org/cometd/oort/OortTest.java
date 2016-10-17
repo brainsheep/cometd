@@ -53,8 +53,9 @@ public abstract class OortTest {
     public static Iterable<Object[]> data() {
         return Arrays.asList(new Object[][]
                 {
-                        {WebSocketTransport.class.getName()},
-                        {JettyWebSocketTransport.class.getName()}
+                        //{WebSocketTransport.class.getName()},
+                        //{JettyWebSocketTransport.class.getName()},
+                        {LongPollingTransport.class.getName()}
                 }
         );
     }
@@ -63,7 +64,7 @@ public abstract class OortTest {
     public final TestTracker testName = new TestTracker();
     protected Logger logger = LoggerFactory.getLogger(getClass());
     private final List<Server> servers = new ArrayList<>();
-    private final List<Oort> oorts = new ArrayList<>();
+    protected final List<Oort> oorts = new ArrayList<>();
     private final List<BayeuxClient> clients = new ArrayList<>();
     private final String serverTransport;
 
