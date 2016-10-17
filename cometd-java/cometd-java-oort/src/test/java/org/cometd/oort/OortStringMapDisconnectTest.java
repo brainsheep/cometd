@@ -78,7 +78,7 @@ public class OortStringMapDisconnectTest extends OortTest {
     public void testMassiveDisconnect() throws Exception {
         int nodes = 4;
 
-        int usersPerNode = 2000;
+        int usersPerNode = 1000;
         int totalUsers = nodes * usersPerNode;
         // One event in a node is replicated to other "nodes" nodes.
         int totalEvents = nodes * totalUsers;
@@ -116,11 +116,17 @@ public class OortStringMapDisconnectTest extends OortTest {
                 @Override
                 public void onPut(OortObject.Info<ConcurrentMap<String, String>> info, OortMap.Entry<String, String> entry) {
                     putLatch.countDown();
+                    if (putLatch.getCount() % 100 == 0) {
+                        System.out.println("putLatch.getCount() = " + putLatch.getCount());
+                    }
                 }
 
                 @Override
                 public void onRemoved(OortObject.Info<ConcurrentMap<String, String>> info, OortMap.Entry<String, String> entry) {
                     removedLatch.countDown();
+                    if (removedLatch.getCount() % 100 == 0) {
+                        System.out.println("removedLatch.getCount() = " + removedLatch.getCount());
+                    }
                 }
             };
             oortStringMap.addListener(new OortMap.DeltaListener<>(oortStringMap));
@@ -179,7 +185,10 @@ public class OortStringMapDisconnectTest extends OortTest {
 
         System.out.println("Logged in all users!");
 
-        Assert.assertTrue("putLatch has to be 0, but was " + putLatch.getCount(), putLatch.await(totalEvents * 60L, TimeUnit.MILLISECONDS));
+        boolean putLatchCount = putLatch.await(totalEvents * 60L, TimeUnit.MILLISECONDS);
+        Assert.assertTrue("putLatch has to be 0, but was " + putLatch.getCount(), putLatchCount);
+
+        System.out.println("putLatch.getCount() after timeout = " + putLatch.getCount());
 
 
         // Thread.sleep(10000);
@@ -214,13 +223,15 @@ public class OortStringMapDisconnectTest extends OortTest {
 
         System.out.println("Disconnected all clients!");
 
-        Assert.assertTrue("removedLatch has to be 0, but was " + removedLatch.getCount(), removedLatch.await(totalEvents * 10L, TimeUnit.MILLISECONDS));
+        boolean removedLatchCount = removedLatch.await(totalEvents * 10L, TimeUnit.MILLISECONDS);
+        Assert.assertTrue("removedLatch has to be 0, but was " + removedLatch.getCount(), removedLatchCount);
 
         Thread.sleep(5000);
 
         checkOortMaps(0);
 
-        Assert.assertTrue("presenceLatch has to be 0, but was " + presenceLatch.getCount(), presenceLatch.await(100, TimeUnit.SECONDS));
+        boolean presenceLatchCount = presenceLatch.await(100, TimeUnit.SECONDS);
+        Assert.assertTrue("presenceLatch has to be 0, but was " + presenceLatch.getCount(), presenceLatchCount);
 
         for (Seti seti : setis) {
             Assert.assertThat(seti.getUserIds().size(), Matchers.equalTo(0));
@@ -280,8 +291,11 @@ public class OortStringMapDisconnectTest extends OortTest {
             OortComet oortCometX1 = oort.findComet(oort1.getURL());
             Assert.assertTrue(oortCometX1.waitFor(5000, BayeuxClient.State.CONNECTED));
         }
-        Assert.assertTrue("joinLatch has to be 0, but was " + joinLatch.getCount(), joinLatch.await(nodes * 2, TimeUnit.SECONDS));
-        Thread.sleep(1000);
+
+        boolean joinLatchCount = joinLatch.await(nodes * 2, TimeUnit.SECONDS);
+        Assert.assertTrue("joinLatch has to be 0, but was " + joinLatch.getCount(), joinLatchCount);
+
+        // Thread.sleep(1000);
 
         int startEvents = 0;
         for (int i = nodes; i > 0; --i) {
@@ -296,6 +310,9 @@ public class OortStringMapDisconnectTest extends OortTest {
                 public boolean onMessage(ServerSession from, ServerChannel channel, ServerMessage.Mutable message) {
                     if (message.getDataAsMap().get("alive") == Boolean.TRUE) {
                         setiLatch.countDown();
+                        if (setiLatch.getCount() % 100 == 0) {
+                            System.out.println("setiLatch.getCount() = " + setiLatch.getCount());
+                        }
                     }
                     return true;
                 }
@@ -304,7 +321,9 @@ public class OortStringMapDisconnectTest extends OortTest {
             setis.add(seti);
             seti.start();
         }
-        // TODO Assert.assertTrue("setiLatch has to be 0, but was " + setiLatch.getCount(), setiLatch.await(15, TimeUnit.SECONDS));
+
+        boolean setiLatchCount = setiLatch.await(30, TimeUnit.SECONDS);
+        // TODO Assert.assertTrue("setiLatch has to be 0, but was " + setiLatch.getCount(), setiLatchCount);
 
         // Start the OortStringMaps.
         String name = "users";
@@ -319,12 +338,17 @@ public class OortStringMapDisconnectTest extends OortTest {
                 public void onUpdated(OortObject.Info<ConcurrentMap<String, String>> oldInfo, OortObject.Info<ConcurrentMap<String, String>> newInfo) {
                     if (oldInfo == null) {
                         mapLatch.countDown();
+                        if (mapLatch.getCount() % 100 == 0) {
+                            System.out.println("mapLatch.getCount() = " + mapLatch.getCount());
+                        }
                     }
                 }
             });
             users.start();
         }
-        // TODO Assert.assertTrue("mapLatch has to be 0, but was " + mapLatch.getCount(), mapLatch.await(15, TimeUnit.SECONDS));
+
+        boolean mapLatchCount = mapLatch.await(30, TimeUnit.SECONDS);
+        // TODO Assert.assertTrue("mapLatch has to be 0, but was " + mapLatch.getCount(), mapLatchCount);
 
         // Verify that the OortStringMaps are setup correctly.
         final String setupKey = "setup";
@@ -334,6 +358,9 @@ public class OortStringMapDisconnectTest extends OortTest {
             public void onPut(OortObject.Info info, OortMap.Entry entry) {
                 if (entry.getKey().equals(setupKey)) {
                     setupLatch.countDown();
+                    if (setupLatch.getCount() % 100 == 0) {
+                        System.out.println("setupLatch.getCount() = " + setupLatch.getCount());
+                    }
                 }
             }
 
@@ -341,6 +368,9 @@ public class OortStringMapDisconnectTest extends OortTest {
             public void onRemoved(OortObject.Info<ConcurrentMap<String, String>> info, OortMap.Entry<String, String> entry) {
                 if (entry.getKey().equals(setupKey)) {
                     setupLatch.countDown();
+                    if (setupLatch.getCount() % 100 == 0) {
+                        System.out.println("setupLatch.getCount() = " + setupLatch.getCount());
+                    }
                 }
             }
         };
@@ -354,8 +384,11 @@ public class OortStringMapDisconnectTest extends OortTest {
         OortObject.Result.Deferred<String> removeAction = new OortObject.Result.Deferred<>();
         oortStringMap1.removeAndShare(setupKey, removeAction);
         Assert.assertNotNull(removeAction.get(15, TimeUnit.SECONDS));
-        // TODO Assert.assertTrue("setupLatch has to be 0, but was " + setupLatch.getCount(), setupLatch.await(15, TimeUnit.SECONDS));
+
+        boolean setupLatchCount = setupLatch.await(30, TimeUnit.SECONDS);
+        // TODO Assert.assertTrue("setupLatch has to be 0, but was " + setupLatch.getCount(), setupLatchCount);
     }
+
 
     public static class UserService extends AbstractService implements ServerSession.RemoveListener {
         private static final String LOGIN_CHANNEL = "/service/login";
