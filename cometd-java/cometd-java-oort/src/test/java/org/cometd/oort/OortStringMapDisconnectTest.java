@@ -47,6 +47,15 @@ public class OortStringMapDisconnectTest extends OortTest {
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private HttpClient httpClient;
 
+    /**
+     * Change this to change the test behaviour.
+     * true :  The connects and logins will be done slower / with intervals to ensure this phase will not fail.
+     *         This is helpful to ensure the disconnect phase is reached.
+     * false : Everything in the connection phase will be done straight forward without intervals between the single connects or logins.
+     *         The test might fail by that in this phase, so the disconnection phase might not be reached.
+     */
+    private boolean carefulConnectionPhase = true;
+
 
     public OortStringMapDisconnectTest(String serverTransport) {
         super(serverTransport);
@@ -153,6 +162,10 @@ public class OortStringMapDisconnectTest extends OortTest {
 
         for (int c = 0; c < usersPerNode; c++) {
             for (int n = 0; n < nodes; n++) {
+                if (carefulConnectionPhase) {
+                    Thread.sleep(100L);
+                }
+
                 Oort oort = oorts.get(n);
 
                 List<BayeuxClient> clientsPerNode = clients.get(n);
@@ -175,6 +188,10 @@ public class OortStringMapDisconnectTest extends OortTest {
 
         for (int c = 0; c < clients.get(0).size(); c++) {
             for (int n = 0; n < nodes; n++) {
+                if (carefulConnectionPhase) {
+                    Thread.sleep(100L);
+                }
+
                 List<BayeuxClient> clientsPerNode = clients.get(n);
                 BayeuxClient client = clientsPerNode.get(c);
                 Assert.assertTrue(client.waitFor(60000, BayeuxClient.State.CONNECTED));
@@ -214,6 +231,8 @@ public class OortStringMapDisconnectTest extends OortTest {
                 }
             }
         }
+
+        LOG.info("Disconnect for all client triggered. Waiting for all disconnects to complete...");
 
         // wait until all clients are disconnected
         for (int c = 0; c < clients.get(0).size(); c++) {
@@ -276,7 +295,7 @@ public class OortStringMapDisconnectTest extends OortTest {
                 LOG.info("joinLatch.getCount() = " + joinLatch.getCount());
             }
             public void cometLeft(Event event) {
-                LOG.error("#### Comet left the cluster " + event.getCometURL() + " (cometId " + event.getCometId()  + ")");
+                LOG.info("#### Comet left the cluster " + event.getCometURL() + " (cometId " + event.getCometId()  + ")");
             }
         };
         Map<String, String> options = new HashMap<>();
